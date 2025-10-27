@@ -5,7 +5,7 @@ YouTube Data API v3 で:
 - 登録者 9,000〜300,000
 - 直近6ヶ月以内に更新あり
 - （任意）企業・協会・大手メディア・有名人っぽいチャンネルを除外
-- 結果をCSV保存
+- 結果に YouTubeチャンネルURL を含めてCSV保存
 
 使い方:
   export YOUTUBE_API_KEY="あなたのAPIキー"
@@ -33,8 +33,8 @@ KEYWORDS = [
 REGION_CODE = "JP"
 MAX_PAGES_PER_KEYWORD = 2
 
-MIN_SUBSCRIBERS = 9_000
-MAX_SUBSCRIBERS = 300_000
+MIN_SUBSCRIBERS = 1_000
+MAX_SUBSCRIBERS = 500_000
 
 LATEST_WITHIN_DAYS = 183  # 直近6ヶ月以内
 
@@ -213,6 +213,8 @@ def main():
         if not latest_dt or latest_dt < latest_after_dt:
             continue
 
+        channel_url = f"https://www.youtube.com/channel/{channel_id}"
+
         results.append({
             "channel_id": channel_id,
             "title": title,
@@ -220,6 +222,7 @@ def main():
             "subscribers": subscribers,
             "latest_video_published_at": latest_iso,
             "channel_started_at": snip.get("publishedAt"),
+            "channel_url": channel_url
         })
 
     # 4️⃣ 重複除去＆出力
@@ -230,17 +233,17 @@ def main():
         print("条件に合致するチャンネルはありません。")
         return
 
-    print("title,subscribers,latest_video_published_at,channel_id")
+    print("title,subscribers,latest_video_published_at,channel_url")
     for r in results:
         t = r["title"].replace(",", "，")
-        print(f'{t},{r["subscribers"]},{r["latest_video_published_at"]},{r["channel_id"]}')
+        print(f'{t},{r["subscribers"]},{r["latest_video_published_at"]},{r["channel_url"]}')
 
     # CSV保存
     out_path = os.path.abspath("./output_youtube_channels.csv")
     with open(out_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=[
             "title", "subscribers", "latest_video_published_at",
-            "channel_id", "channel_started_at", "description"
+            "channel_url", "channel_id", "channel_started_at", "description"
         ])
         w.writeheader()
         for r in results:
