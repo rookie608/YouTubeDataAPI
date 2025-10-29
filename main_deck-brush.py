@@ -12,8 +12,6 @@ YouTube Data API v3 で:
 使い方:
   export YOUTUBE_API_KEY="あなたのAPIキー"
   python main_deck-brush.py
-
-※ クォータ節約: search.list は各キーワード1ページのみ（100ユニット/回）
 """
 
 import os
@@ -29,37 +27,27 @@ API_KEY = os.environ.get("YOUTUBE_API_KEY")
 BASE = "https://www.googleapis.com/youtube/v3"
 
 # ======== 検索キーワード（清掃系・OR条件） ========
-KEYWORDS = [
-    "清掃", "掃除", "ハウスキーパー", "家事代行", "ハウスクリーニング",
-    "屋内 清掃", "ルームクリーニング", "片付け", "整理収納",
-    "水回り 掃除", "トイレ 掃除", "バスルーム 掃除", "キッチン 掃除",
-    "換気扇 掃除", "エアコン クリーニング", "床 ワックス 掃除", "カビ取り 掃除",
-]
+KEYWORDS = ["清掃", "掃除", "ハウスキーパー", "家事代行", "ハウスクリーニング", "屋内清掃", "ルームクリーニング", "片付け", "整理収納", "水回り掃除", "トイレ掃除", "バスルーム掃除", "キッチン掃除", "換気扇掃除", "エアコンクリーニング", "床ワックス掃除", "カビ取り掃除", "主婦のチャンネル", "主婦ライフ", "主婦 vlog", "家事ルーティン", "暮らしの工夫", "生活の知恵", "家事のコツ", "掃除ルーティン", "時短家事", "家事モチベーション", "お片付け", "断捨離", "収納アイデア", "整理術", "ミニマリスト", "シンプルライフ", "収納グッズ", "片付け術", "収納方法", "インテリア整理", "引越し業者", "引越し準備", "引越しサポート", "不用品回収", "荷造り", "荷解き", "転居サポート", "引越し片付け", "引越し清掃", "引越し後掃除"]
 
 REGION_CODE = "JP"
 MAX_PAGES_PER_KEYWORD = 1          # クォータ節約
-STOP_AFTER_N_RESULTS = 200         # 保険で上限
+STOP_AFTER_N_RESULTS = 200         # CSV出力上限目安
 
 # ======== 数値条件 ========
 MIN_SUBSCRIBERS = 9_000
 MAX_SUBSCRIBERS = 300_000
 LATEST_WITHIN_DAYS = 183           # 直近6ヶ月以内
 
-# ======== 除外（緩め：大手メディア/芸能/大企業っぽい） ========
+# ======== 除外パターン ========
 EXCLUDE_BRANDY_CHANNELS = True
 EXCLUDE_NAME_PATTERNS = [
-    # 大手メディア
-    r"NHK", r"日経", r"朝日", r"毎日", r"読売", r"産経",
-    r"テレビ", r"TV",
-    # 清掃大手系・プラットフォーム（除外したい場合）
+    r"NHK", r"日経", r"朝日", r"毎日", r"読売", r"産経", r"テレビ", r"TV",
     r"ダスキン", r"おそうじ本舗", r"ベアーズ", r"CaSy", r"ニチイ",
-    # 芸能系
     r"芸能|有名人|アイドル",
 ]
 
 # ================== HTTPユーティリティ ==================
 def yt_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    """共通GET（例外捕捉・指数バックオフ＋ジッター）"""
     import random
     params = {**params, "key": API_KEY}
     last_resp = None
@@ -93,8 +81,7 @@ def warn(tag: str, resp: Dict[str, Any]):
     )
 
 def sanity_check() -> bool:
-    """APIキー/クォータ疎通確認（1ユニット）"""
-    test_id = "UC_x5XG1OV2P6uZZ5FSM9Ttw"  # Google Developers
+    test_id = "UC_x5XG1OV2P6uZZ5FSM9Ttw"
     resp = yt_get("channels", {"part": "id", "id": test_id})
     if resp.get("__error__"):
         print("[SANITY] FAILED", file=sys.stderr)
@@ -105,7 +92,6 @@ def sanity_check() -> bool:
 
 # ================== APIラッパ ==================
 def search_channels(keyword: str, max_pages: int = 1, region_code: Optional[str] = "JP") -> List[str]:
-    """search.list で channelId を収集（1回=100ユニット）"""
     ids: set[str] = set()
     page_token = None
     for _ in range(max_pages):
@@ -132,20 +118,22 @@ def search_channels(keyword: str, max_pages: int = 1, region_code: Optional[str]
     return list(ids)
 
 def search_channels_multi(keywords: List[str], max_pages: int, region_code: str) -> List[str]:
-    """複数キーワードを OR 条件で結合"""
+    """全キーワードを順番に検索（途中で止めず、進捗表示付き）"""
     all_ids: set[str] = set()
-    for kw in keywords:
-        print(f"🔍 Searching: {kw}")
-        all_ids.update(search_channels(kw, max_pages=max_pages, region_code=region_code))
-        if len(all_ids) >= STOP_AFTER_N_RESULTS * 3:
-            break
+    total = len(keywords)
+    for idx, kw in enumerate(keywords, 1):
+        print(f"🔍 Searching ({idx}/{total}): {kw}")
+        got = search_channels(kw, max_pages=max_pages, region_code=region_code)
+        before = len(all_ids)
+        all_ids.update(got)
+        added = len(all_ids) - before
+        print(f"    ↳ fetched={len(got)} / unique_added={added} / unique_total={len(all_ids)}")
     return list(all_ids)
 
 def chunk(lst: List[str], n: int) -> List[List[str]]:
     return [lst[i:i+n] for i in range(0, len(lst), n)]
 
 def get_channels_details(channel_ids: List[str]) -> List[Dict[str, Any]]:
-    """channels.list で詳細取得（statistics,snippet,contentDetails）"""
     results: List[Dict[str, Any]] = []
     for batch in chunk(channel_ids, 50):
         resp = yt_get("channels", {
@@ -159,7 +147,6 @@ def get_channels_details(channel_ids: List[str]) -> List[Dict[str, Any]]:
     return results
 
 def get_latest_upload_published_at(uploads_playlist_id: str) -> Optional[str]:
-    """最新動画の公開日（playlistItems で1件）"""
     if not uploads_playlist_id:
         return None
     resp = yt_get("playlistItems", {
@@ -190,7 +177,6 @@ def any_match(patterns: List[str], text: str) -> bool:
     return False
 
 def save_csv(rows: List[Dict[str, Any]]) -> str:
-    """CSV出力（utf-8-sigでExcel互換、実行日時入りファイル名）"""
     now_str = datetime.now().strftime("%Y%m%d_%H%M")
     filename = f"output_youtube_channels_{now_str}.csv"
     out_path = os.path.abspath(filename)
@@ -218,7 +204,7 @@ def main():
 
     latest_after_dt = datetime.now(timezone.utc) - timedelta(days=LATEST_WITHIN_DAYS)
 
-    # 1) 候補収集（OR条件）
+    # 1) 候補収集
     channel_ids = search_channels_multi(KEYWORDS, max_pages=MAX_PAGES_PER_KEYWORD, region_code=REGION_CODE)
     if not channel_ids:
         print("該当チャンネルが見つかりません。")
@@ -227,7 +213,7 @@ def main():
     # 2) 詳細取得
     details = get_channels_details(channel_ids)
 
-    # 3) 条件フィルタ
+    # 3) フィルタリング
     results = []
     for ch in details:
         stat = ch.get("statistics", {}) or {}
@@ -238,16 +224,13 @@ def main():
         channel_id = ch.get("id")
         title = snip.get("title") or ""
         desc = snip.get("description") or ""
-        handle = snip.get("customUrl") or ""                   # 例: @xxxxxx
+        handle = snip.get("customUrl") or ""
         handle_url = f"https://www.youtube.com/{handle}" if handle else ""
         channel_url = f"https://www.youtube.com/channel/{channel_id}"
 
-        # 除外（緩め）
-        if EXCLUDE_BRANDY_CHANNELS:
-            if any_match(EXCLUDE_NAME_PATTERNS, f"{title} {desc}"):
-                continue
+        if EXCLUDE_BRANDY_CHANNELS and any_match(EXCLUDE_NAME_PATTERNS, f"{title} {desc}"):
+            continue
 
-        # 登録者・動画本数
         sub_raw = stat.get("subscriberCount")
         video_count_raw = stat.get("videoCount")
         if sub_raw is None:
@@ -258,7 +241,6 @@ def main():
         if subscribers < MIN_SUBSCRIBERS or subscribers > MAX_SUBSCRIBERS:
             continue
 
-        # 直近更新（6ヶ月以内）
         latest_iso = get_latest_upload_published_at(uploads_id)
         latest_dt = iso_to_dt(latest_iso) if latest_iso else None
         if not latest_dt or latest_dt < latest_after_dt:
@@ -280,22 +262,18 @@ def main():
         if len(results) >= STOP_AFTER_N_RESULTS:
             break
 
-    # 4) 出力
     if not results:
         print("条件に合致するチャンネルはありません。")
         return
 
-    # 重複除去＆整列
     uniq = {r["channel_id"]: r for r in results}
     results = sorted(uniq.values(), key=lambda x: (x["登録者数（人）"], x["チャンネル名"] or ""))
 
-    # 画面出力（確認用）
     print("チャンネル名,ハンドル,YouTubeのURL,ハンドルURL,登録者数（人）,最終投稿日,動画本数")
     for r in results:
         t = (r["チャンネル名"] or "").replace(",", "，")
         print(f'{t},{r["ハンドル"]},{r["YouTubeのURL"]},{r["ハンドルURL"]},{r["登録者数（人）"]},{r["最終投稿日"]},{r["動画本数"]}')
 
-    # CSV保存
     save_csv(results)
 
 if __name__ == "__main__":
