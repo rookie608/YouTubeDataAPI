@@ -22,10 +22,27 @@ API_KEY = os.environ.get("YOUTUBE_API_KEY")
 BASE = "https://www.googleapis.com/youtube/v3"
 
 # ======== 検索キーワード（OR条件） ========
+# ★依頼通り：キーワードは変更しない（スペース等もそのまま）
 KEYWORDS = [
+    # リフォーム・住宅系
     "トイレ", "トイレ リフォーム", "水回り リフォーム", "洗面所 リフォーム",
     "住宅", "住宅 リフォーム", "間取り", "内装 DIY", "リノベーション",
     "トイレ DIY", "バスルーム リフォーム", "キッチン リフォーム", "中古住宅 リフォーム",
+    # 暮らし・主婦ライフ系
+    "主婦 vlog", "主婦ライフ", "家事ルーティン", "暮らしの工夫",
+    "生活の知恵", "家事のコツ", "時短家事", "家事モチベーション",
+    "ミニマリスト", "シンプルライフ", "整理術", "収納アイデア", "収納グッズ", "収納方法",
+
+    # お片付け・整理収納系（重複ワード除外）
+    "お片付け", "片付け術", "インテリア整理", "断捨離",
+
+    # 引越し・不用品回収系
+    "引越し業者", "引越し準備", "引越しサポート",
+    "不用品回収", "荷造り", "荷解き", "転居サポート",
+    "引越し片付け", "引越し後掃除",
+
+    # 暮らし発信チャンネル
+    "主婦のチャンネル", "暮らし系 YouTube", "家事系 YouTube",
 ]
 
 REGION_CODE = "JP"
@@ -34,7 +51,7 @@ MAX_PAGES_PER_KEYWORD = 1
 MIN_SUBSCRIBERS = 9_000
 MAX_SUBSCRIBERS = 300_000
 LATEST_WITHIN_DAYS = 183
-STOP_AFTER_N_RESULTS = 200
+STOP_AFTER_N_RESULTS = 200  # 出力の上限目安（検索ループの早期打ち切りには使わない）
 
 # ======== 除外条件（緩め） ========
 EXCLUDE_BRANDY_CHANNELS = True
@@ -49,7 +66,7 @@ EXCLUDE_NAME_PATTERNS = [
 
 
 def yt_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    """共通GET（リトライつき・例外捕捉）"""
+    """共通GET（指数バックオフ＋ジッター、例外捕捉）"""
     import random
     params = {**params, "key": API_KEY}
     last_resp = None
@@ -125,13 +142,17 @@ def search_channels(keyword: str, max_pages: int = 1, region_code: Optional[str]
 
 
 def search_channels_multi(keywords: List[str], max_pages: int, region_code: str) -> List[str]:
-    """複数キーワードを OR 条件で結合"""
+    """複数キーワードを OR 条件で結合（全キーワードを最後まで回す／進捗表示）"""
     all_ids: set[str] = set()
-    for kw in keywords:
-        print(f"🔍 Searching for keyword: {kw}")
-        all_ids.update(search_channels(kw, max_pages=max_pages, region_code=region_code))
-        if len(all_ids) >= STOP_AFTER_N_RESULTS * 3:
-            break
+    total = len(keywords)
+    for idx, kw in enumerate(keywords, 1):
+        print(f"🔍 Searching ({idx}/{total}): {kw}")
+        got = search_channels(kw, max_pages=max_pages, region_code=region_code)
+        before = len(all_ids)
+        all_ids.update(got)
+        added = len(all_ids) - before
+        print(f"    ↳ fetched={len(got)} / unique_added={added} / unique_total={len(all_ids)}")
+        # ※ ここでは早期breakしない（以前の STOP_AFTER_N_RESULTS * 3 による中断を撤廃）
     return list(all_ids)
 
 
@@ -155,7 +176,7 @@ def get_channels_details(channel_ids: List[str]) -> List[Dict[str, Any]]:
 
 
 def get_latest_upload_published_at(uploads_playlist_id: str) -> Optional[str]:
-    """最新動画の公開日取得"""
+    """最新動画の公開日取得（エラー時は静かに None を返す）"""
     if not uploads_playlist_id:
         return None
     resp = yt_get("playlistItems", {
@@ -163,8 +184,8 @@ def get_latest_upload_published_at(uploads_playlist_id: str) -> Optional[str]:
         "playlistId": uploads_playlist_id,
         "maxResults": 1
     })
-    if resp.get("__error__"):
-        warn("playlistItems.list", resp)
+    # ここで warn を出さずに静かにスキップ（以前の挙動から変更）
+    if resp.get("__error__") or "items" not in resp:
         return None
     items = resp.get("items", [])
     if not items:
@@ -231,17 +252,18 @@ def main():
         stat = ch.get("statistics", {}) or {}
         snip = ch.get("snippet", {}) or {}
         cdet = ch.get("contentDetails", {}) or {}
+
         uploads_id = (cdet.get("relatedPlaylists") or {}).get("uploads", "")
-        channel_id = ch["id"]
+        channel_id = ch.get("id")
         title = snip.get("title") or ""
         desc = snip.get("description") or ""
         handle = snip.get("customUrl") or ""  # 例: @toivo6583
         handle_url = f"https://www.youtube.com/{handle}" if handle else ""
+        channel_url = f"https://www.youtube.com/channel/{channel_id}"
 
         # 除外
-        if EXCLUDE_BRANDY_CHANNELS:
-            if any_match(EXCLUDE_NAME_PATTERNS, f"{title} {desc}"):
-                continue
+        if EXCLUDE_BRANDY_CHANNELS and any_match(EXCLUDE_NAME_PATTERNS, f"{title} {desc}"):
+            continue
 
         sub_raw = stat.get("subscriberCount")
         video_count_raw = stat.get("videoCount")
@@ -258,7 +280,6 @@ def main():
         if not latest_dt or latest_dt < latest_after_dt:
             continue
 
-        channel_url = f"https://www.youtube.com/channel/{channel_id}"
         results.append({
             "チャンネル名": title,
             "ハンドル": handle,
@@ -272,15 +293,23 @@ def main():
             "description": desc
         })
 
+        # 出力上限に達したら確定（任意で残す）
+        if len(results) >= STOP_AFTER_N_RESULTS:
+            break
+
     # 4️⃣ 出力
     if not results:
         print("条件に合致するチャンネルはありません。")
         return
 
-    results = sorted(results, key=lambda x: (x["登録者数（人）"], x["チャンネル名"] or ""))
+    # 重複除去＆並べ替え（登録者数 → チャンネル名）
+    uniq = {r["channel_id"]: r for r in results}
+    results = sorted(uniq.values(), key=lambda x: (x["登録者数（人）"], x["チャンネル名"] or ""))
+
     print("チャンネル名,ハンドル,YouTubeのURL,ハンドルURL,登録者数（人）,最終投稿日,動画本数")
     for r in results:
-        print(f'{r["チャンネル名"]},{r["ハンドル"]},{r["YouTubeのURL"]},{r["ハンドルURL"]},{r["登録者数（人）"]},{r["最終投稿日"]},{r["動画本数"]}')
+        title_safe = (r["チャンネル名"] or "").replace(",", "，")
+        print(f'{title_safe},{r["ハンドル"]},{r["YouTubeのURL"]},{r["ハンドルURL"]},{r["登録者数（人）"]},{r["最終投稿日"]},{r["動画本数"]}')
 
     save_csv(results)
 
